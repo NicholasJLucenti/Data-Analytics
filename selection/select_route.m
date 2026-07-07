@@ -25,6 +25,8 @@ function route = select_route(diagnostics)
 %   too sparsely sampled (relative to its own dynamical timescale) for
 %   safe pointwise derivative estimation.
 %
+%   Both 'standard' (variants/run_standard_sindy.m) and 'weak'
+%   (variants/run_weak_sindy.m) are implemented as of this version.
 %   Implicit SINDy is deliberately NOT selectable from diagnostics alone.
 %   Whether rational terms are warranted is a structural question about
 %   the dynamics, not a noise/sampling question -- it requires fitting a
@@ -48,7 +50,7 @@ if isnan(minSnr)
     route.recommended_variant = 'weak';
     route.differentiation = 'n/a';
     route.reason = 'Insufficient data for noise estimation; weak-form regression is more robust to this uncertainty.';
-    route.implemented = false;
+    route.implemented = true;
     route.warnings = warnings;
     return
 end
@@ -71,15 +73,16 @@ if minSnr < 20 || anySparse
         route.reason = ['At least one channel is sparsely sampled relative to its dynamics. Weak-form ' ...
             'SINDy is preferred because it does not require a uniform, densely sampled derivative estimate.'];
     end
-    route.implemented = false; % variants/run_weak_sindy.m not yet built
+    route.implemented = true;
 
 elseif minSnr < 40
     route.recommended_variant = 'standard';
     route.differentiation = 'regularized';
     route.reason = sprintf(['Worst-case SNR is %.1f dB (20-40 dB range). Standard SINDy is workable, but ' ...
         'derivatives should ideally use a regularized/robust method rather than plain finite differences.'], minSnr);
-    route.implemented = true; % run_standard_sindy.m works; regularized differentiation itself is not yet built,
-                               % so this currently falls back to smooth_data + compute_derivatives
+    route.implemented = true; % run_standard_sindy.m works; a dedicated regularized-differentiation
+                               % scheme is not yet built, so this currently still falls back to
+                               % smooth_data + compute_derivatives
 
 else
     route.recommended_variant = 'standard';
