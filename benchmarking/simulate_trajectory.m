@@ -1,7 +1,7 @@
-function [t_sim, X_sim, sim_info] = simulate_trajectory(Xi, poly_order, t_span, x0, t_eval)
+function [t_sim, X_sim, sim_info] = simulate_trajectory(Xi, poly_order, t_span, x0, t_eval, varargin)
 %SIMULATE_TRAJECTORY Forward-integrate a discovered polynomial ODE model.
 %
-%   [t_sim, X_sim, sim_info] = SIMULATE_TRAJECTORY(Xi, poly_order, t_span, x0, t_eval)
+%   [t_sim, X_sim, sim_info] = SIMULATE_TRAJECTORY(Xi, poly_order, t_span, x0, t_eval, ...)
 %
 %   Inputs:
 %     Xi         - sparse coefficient matrix (M x D) from a SINDy variant
@@ -14,29 +14,59 @@ function [t_sim, X_sim, sim_info] = simulate_trajectory(Xi, poly_order, t_span, 
 %                  solution, so it lines up directly with real data for
 %                  comparison. If omitted, ode45 chooses its own steps.
 %
+%   Name-value options:
+%     'DivergenceBound' - if any state exceeds this magnitude, integration
+%                          stops immediately via a terminal ODE event,
+%                          instead of letting the adaptive solver grind
+%                          through ever-smaller steps trying to resolve a
+%                          near-singular blow-up to the requested
+%                          tolerance (default 1e6, matches the divergence
+%                          check below)
+%     'MaxWallSeconds'   - hard wall-clock cap on a single simulation call
+%                          (default 3). This is a backstop for cases that
+%                          aren't diverging past DivergenceBound but are
+%                          just stiff/slow for a bounded, non-diverging
+%                          trajectory -- without this, one pathological
+%                          candidate in a large hyperparameter sweep can
+%                          stall the whole run.
+%
 %   Outputs:
-%     t_sim    - times of the returned solution (== t_eval if given)
+%     t_sim    - times of the returned solution (== t_eval if given; will
+%                be SHORTER than requested if a divergence event or the
+%                watchdog cut integration off early)
 %     X_sim    - simulated trajectory (numel(t_sim) x D)
 %     sim_info - struct: .success (bool), .message (string, e.g. why it
-%                failed or diverged)
+%                failed, diverged, or was cut off)
 %
 %   A model that diverges or blows up under forward simulation is exactly
 %   the failure mode that in-sample regression fit (AIC/BIC, R^2, even
 %   ensemble inclusion probability) cannot see -- this is the check that
-%   catches it.
+%   catches it. Cutting such cases off early (rather than fighting to
+%   integrate through them precisely) is correct here: we only need to
+%   know that the model diverged, not exactly how.
+
+p = inputParser;
+addParameter(p, 'DivergenceBound', 1e6, @(x) isnumeric(x) && isscalar(x) && x > 0);
+addParameter(p, 'MaxWallSeconds', 3, @(x) isnumeric(x) && isscalar(x) && x > 0);
+parse(p, varargin{:});
+opts = p.Results;
 
 x0 = x0(:)';
 sim_info.success = true;
 sim_info.message = '';
 
 rhs = @(tt, xx) local_rhs(xx, Xi, poly_order);
-odeOpts = odeset('RelTol', 1e-6, 'AbsTol', 1e-8);
+
+startTime = tic;
+odeOpts = odeset('RelTol', 1e-6, 'AbsTol', 1e-8, ...
+    'Events', @(tt, xx) local_divergence_event(xx, opts.DivergenceBound), ...
+    'OutputFcn', @(tt, xx, flag) local_watchdog(tt, xx, flag, startTime, opts.MaxWallSeconds));
 
 % Unstable candidate models (common across a wide hyperparameter sweep)
-% cause ode45 to hit finite-time blow-up, which it reports as a console
-% warning rather than an error. That failure is already detected below
-% (truncated/non-finite output -> sim_info.success = false), so the
-% warning itself is just noise across a large sweep -- suppress it here,
+% cause ode45 to report a "failed to meet tolerances" console warning
+% when it hits the terminal event / watchdog cutoff. That failure is
+% already detected below via truncated/non-finite output, so the warning
+% itself is just noise across a large sweep -- suppress it here,
 % restoring the previous warning state automatically even if this
 % function errors out.
 warnState = warning('off', 'MATLAB:ode45:IntegrationTolNotMet');
@@ -49,12 +79,16 @@ try
         [t_sim, X_sim] = ode45(rhs, t_span, x0, odeOpts);
     end
 
-    if isempty(X_sim) || any(~isfinite(X_sim(:))) || any(abs(X_sim(:)) > 1e6)
+    if isempty(X_sim) || any(~isfinite(X_sim(:))) || any(abs(X_sim(:)) > opts.DivergenceBound)
         sim_info.success = false;
         sim_info.message = 'Trajectory diverged (non-finite or unbounded values encountered).';
     elseif nargin >= 5 && ~isempty(t_eval) && numel(t_sim) < numel(t_eval)
         sim_info.success = false;
-        sim_info.message = 'Integration terminated early (blow-up before reaching requested end time).';
+        if toc(startTime) >= opts.MaxWallSeconds
+            sim_info.message = sprintf('Integration cut off by wall-clock watchdog (> %.1fs).', opts.MaxWallSeconds);
+        else
+            sim_info.message = 'Integration terminated early (divergence event triggered before reaching requested end time).';
+        end
     end
 catch ME
     t_sim = [];
@@ -70,4 +104,26 @@ function dxdt = local_rhs(x, Xi, poly_order)
     xrow = x(:)'; % build_polynomial_library expects (N x D); N=1 for a single state
     Theta_row = build_polynomial_library(xrow, poly_order);
     dxdt = (Theta_row * Xi)';
+end
+
+
+function [value, isterminal, direction] = local_divergence_event(x, bound)
+    % Fires (and stops integration) the moment any state variable's
+    % magnitude crosses the divergence bound, rather than letting ode45
+    % try to precisely resolve a trajectory that's headed to infinity.
+    value = bound - max(abs(x));
+    isterminal = 1;
+    direction = -1;
+end
+
+
+function status = local_watchdog(~, ~, flag, startTime, maxSeconds)
+    % ode45 OutputFcn: returning status=1 halts integration immediately.
+    % Called with flag='init'/'done' at the start/end and '' at every
+    % accepted step in between -- only check the clock on the per-step
+    % calls.
+    status = 0;
+    if isempty(flag) && toc(startTime) > maxSeconds
+        status = 1;
+    end
 end
