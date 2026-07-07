@@ -32,6 +32,16 @@ sim_info.message = '';
 rhs = @(tt, xx) local_rhs(xx, Xi, poly_order);
 odeOpts = odeset('RelTol', 1e-6, 'AbsTol', 1e-8);
 
+% Unstable candidate models (common across a wide hyperparameter sweep)
+% cause ode45 to hit finite-time blow-up, which it reports as a console
+% warning rather than an error. That failure is already detected below
+% (truncated/non-finite output -> sim_info.success = false), so the
+% warning itself is just noise across a large sweep -- suppress it here,
+% restoring the previous warning state automatically even if this
+% function errors out.
+warnState = warning('off', 'MATLAB:ode45:IntegrationTolNotMet');
+cleanupObj = onCleanup(@() warning(warnState)); %#ok<NASGU>
+
 try
     if nargin >= 5 && ~isempty(t_eval)
         [t_sim, X_sim] = ode45(rhs, t_eval, x0, odeOpts);
@@ -42,6 +52,9 @@ try
     if isempty(X_sim) || any(~isfinite(X_sim(:))) || any(abs(X_sim(:)) > 1e6)
         sim_info.success = false;
         sim_info.message = 'Trajectory diverged (non-finite or unbounded values encountered).';
+    elseif nargin >= 5 && ~isempty(t_eval) && numel(t_sim) < numel(t_eval)
+        sim_info.success = false;
+        sim_info.message = 'Integration terminated early (blow-up before reaching requested end time).';
     end
 catch ME
     t_sim = [];
