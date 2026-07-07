@@ -1,52 +1,53 @@
-function report = profile_data(t, X)
-    % PROFILE_DATA Master diagnostic function for SINDy Analytics.
-    %
-    % Inputs:
-    %   t - Time vector (N x 1)
-    %   X - State matrix (N x D)
+function diagnostics = profile_data(raw)
+%PROFILE_DATA Run the full diagnostic suite over a raw data struct array
+%and package the results for downstream routing decisions.
+%
+%   diagnostics = PROFILE_DATA(raw) returns a struct:
+%     .per_variable  - struct array, one entry per variable in raw:
+%                        .name
+%                        .noise     (output of estimate_noise: snr_db, ...)
+%                        .sampling  (output of check_sampling: dt_cv, ...)
+%                        .sparsity  (output of estimate_sparsity: points_per_period, ...)
+%     .horizon       - output of detect_horizon_mismatch across all variables
+%     .summary       - pipeline-level rollups consumed by selection/select_route.m:
+%                        .min_snr_db        - worst-case SNR across variables (dB)
+%                        .max_dt_cv         - worst-case sampling irregularity
+%                        .any_sparse        - true if any variable is under-sampled
+%                        .overlap_fraction  - shared horizon fraction (from horizon)
+%
+%   This function assumes raw has already passed io/validate_input.m --
+%   it does not re-check structural validity, only computes statistics.
 
-    fprintf('=========================================\n');
-    fprintf('        SINDY DATA ANALYTICS PROFILER    \n');
-    fprintf('=========================================\n');
+nVars = numel(raw);
+if nVars == 0
+    error('profile_data:empty', 'raw struct array is empty.');
+end
 
-    [N, D] = size(X);
-    report = struct();
-    report.num_samples = N;
-    report.dimensions = D;
+perVar = struct('name', {}, 'noise', {}, 'sampling', {}, 'sparsity', {});
 
-    %% 1. Call Sampling Worker
-    sampling = check_sampling(t);
-    report.is_regularly_sampled = sampling.is_regular;
-    report.dt_mean = sampling.dt_mean;
-    
-    fprintf('Samples: %d | State Dimensions: %d\n', N, D);
-    if ~report.is_regularly_sampled
-        fprintf('[WARNING] Irregular time steps detected! (CV = %.4f)\n', sampling.dt_variability);
-        fprintf('          Recommendation: Run preprocessing/interpolate_missing.m\n');
+for i = 1:nVars
+    if isfield(raw(i), 'name') && ~isempty(raw(i).name)
+        nm = raw(i).name;
     else
-        fprintf('[INFO] Data is regularly sampled (dt = %.4f).\n', report.dt_mean);
+        nm = sprintf('var%d', i);
     end
 
-    %% 2. Call Noise Estimation Worker
-    report.snr_db = estimate_noise(X);
-    report.mean_snr = mean(report.snr_db);
-    
-    for i = 1:D
-        fprintf('  -> State %d Estimated SNR: %.2f dB\n', i, report.snr_db(i));
-    end
+    perVar(i).name = nm;
+    perVar(i).noise = estimate_noise(raw(i).t, raw(i).y);
+    perVar(i).sampling = check_sampling(raw(i).t);
+    perVar(i).sparsity = estimate_sparsity(raw(i).t, raw(i).y);
+end
 
-    %% 3. Triage & Strategy Decision Engine
-    fprintf('\n--- PRELIMINARY TRIAGE REPORT ---\n');
-    if report.mean_snr < 20
-        report.suggested_variant = 'Weak SINDy (WSINDy)';
-        fprintf('CRITICAL: Low SNR (< 20dB) detected. Bypass standard differentiation.\n');
-        fprintf('STRATEGY: Use weak/integral formulation to handle noise.\n');
-    elseif report.mean_snr >= 20 && report.mean_snr < 40
-        report.suggested_variant = 'Standard SINDy with Regularized Differentiation';
-        fprintf('STRATEGY: Use Total Variation Regularization or Savitzky-Golay for dx/dt.\n');
-    else
-        report.suggested_variant = 'Standard SINDy';
-        fprintf('STRATEGY: Clean data detected. Finite differences + STLSQ optimizer should suffice.\n');
-    end
-    fprintf('=========================================\n');
+diagnostics.per_variable = perVar;
+diagnostics.horizon = detect_horizon_mismatch(raw);
+
+snrVals = arrayfun(@(v) v.noise.snr_db, perVar);
+cvVals = arrayfun(@(v) v.sampling.dt_cv, perVar);
+sparseFlags = arrayfun(@(v) v.sparsity.is_sparse, perVar);
+
+diagnostics.summary.min_snr_db = min(snrVals, [], 'omitnan');
+diagnostics.summary.max_dt_cv = max(cvVals, [], 'omitnan');
+diagnostics.summary.any_sparse = any(sparseFlags);
+diagnostics.summary.overlap_fraction = diagnostics.horizon.overlap_fraction;
+
 end
