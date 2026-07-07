@@ -68,6 +68,9 @@ title('Grid search results: complexity vs. fit trade-off');
 set(gca, 'YScale', 'log');
 grid on;
 
+%% 6. Simulate the extracted models forward and overlay against real data
+plot_best_models(t, X, names, best);
+
 
 %% --- local helper ---
 function report_model(r, names)
