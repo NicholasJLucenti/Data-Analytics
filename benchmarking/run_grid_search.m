@@ -8,7 +8,7 @@ function [results, t, X, names] = run_grid_search(raw, variant, varargin)
 %
 %   Inputs:
 %     raw     - raw struct array (io/load_raw_data.m format)
-%     variant - 'standard' or 'weak'
+%     variant - 'standard', 'weak', or 'implicit'
 %
 %   Name-value options:
 %     'LambdaGrid'            - sparsity thresholds to sweep
@@ -21,19 +21,30 @@ function [results, t, X, names] = run_grid_search(raw, variant, varargin)
 %                                orders (default [2 4 6])
 %     'NumDensePoints'        - densification target for
 %                                align_and_truncate (default 300)
-%     'SmoothingFactor'       - (standard only) Lowess span fraction
-%                                (default 0.2)
+%     'SmoothingFactor'       - (standard/implicit only) Lowess span
+%                                fraction (default 0.2)
 %
 %   Output:
 %     results - struct array, one entry per parameter combination:
+%                 .variant           - which variant produced this row
 %                 .lambda, .poly_order, .window_points, .test_function_order
-%                   (window_points/test_function_order are NaN for the
-%                   standard variant, which doesn't use them)
-%                 .num_active_terms  - nnz(Xi), a sparsity count
+%                   (window_points/test_function_order are NaN for
+%                   standard/implicit, which don't use them)
+%                 .num_active_terms  - sparsity count. nnz(Xi) for
+%                   standard/weak; for implicit, the number of nonzero
+%                   numerator coefficients plus nonzero denominator
+%                   coefficients EXCLUDING the structurally-fixed
+%                   constant term (see run_implicit_sindy.m)
 %                 .trajectory_rmse   - from compute_trajectory_error.m
 %                 .normalized_rmse   - scale-free version of the above
 %                 .dynamics_class    - from classify_dynamics.m
-%                 .Xi, .library_names - the fitted model itself
+%                 .Xi                - the fitted model itself: a
+%                   coefficient matrix for standard/weak, or a 1xD
+%                   rational struct array (see run_implicit_sindy.m) for
+%                   implicit. benchmarking/simulate_trajectory.m dispatches
+%                   on this automatically, so callers generally don't
+%                   need to care which shape they got.
+%                 .library_names     - candidate term names
 %                 .success           - false if this combination errored
 %                                       or failed to simulate
 %     t, X, names - the shared densified trajectory/channel names used to
@@ -50,32 +61,33 @@ addParameter(p, 'SmoothingFactor', 0.2, @isnumeric);
 parse(p, varargin{:});
 opts = p.Results;
 
-if ~ismember(variant, {'standard', 'weak'})
-    error('run_grid_search:badVariant', 'variant must be ''standard'' or ''weak''.');
+if ~ismember(variant, {'standard', 'weak', 'implicit'})
+    error('run_grid_search:badVariant', 'variant must be ''standard'', ''weak'', or ''implicit''.');
 end
 
 %% Shared preprocessing -- done once, independent of the swept parameters
 [t, X, names] = align_and_truncate(raw, opts.NumDensePoints);
 
-if strcmp(variant, 'standard')
+needsDerivatives = strcmp(variant, 'standard') || strcmp(variant, 'implicit');
+if needsDerivatives
     X_smooth = smooth_data(t, X, opts.SmoothingFactor);
     dXdt = compute_derivatives(t, X_smooth);
 end
 
 %% Build the parameter grid
-if strcmp(variant, 'standard')
-    [lambdaGrid, polyGrid] = ndgrid(opts.LambdaGrid, opts.PolyOrderGrid);
-    combos = [lambdaGrid(:), polyGrid(:), nan(numel(lambdaGrid), 2)];
-else
+if strcmp(variant, 'weak')
     [lambdaGrid, polyGrid, winGrid, tfoGrid] = ndgrid(opts.LambdaGrid, opts.PolyOrderGrid, ...
         opts.WindowPointsGrid, opts.TestFunctionOrderGrid);
     combos = [lambdaGrid(:), polyGrid(:), winGrid(:), tfoGrid(:)];
+else
+    [lambdaGrid, polyGrid] = ndgrid(opts.LambdaGrid, opts.PolyOrderGrid);
+    combos = [lambdaGrid(:), polyGrid(:), nan(numel(lambdaGrid), 2)];
 end
 nCombos = size(combos, 1);
 
 fprintf('[GRID SEARCH] Sweeping %d parameter combinations (%s variant)...\n', nCombos, variant);
 
-results = struct('lambda', {}, 'poly_order', {}, 'window_points', {}, 'test_function_order', {}, ...
+results = struct('variant', {}, 'lambda', {}, 'poly_order', {}, 'window_points', {}, 'test_function_order', {}, ...
     'num_active_terms', {}, 'trajectory_rmse', {}, 'normalized_rmse', {}, 'dynamics_class', {}, ...
     'Xi', {}, 'library_names', {}, 'success', {});
 
@@ -88,32 +100,41 @@ for c = 1:nCombos
     test_function_order = combos(c, 4);
 
     try
-        if strcmp(variant, 'standard')
-            [Xi, library_names] = run_standard_sindy(X_smooth, dXdt, lambda, poly_order);
-        else
-            [Xi, library_names] = run_weak_sindy(t, X, lambda, poly_order, ...
-                'WindowPoints', window_points, 'TestFunctionOrder', test_function_order);
+        switch variant
+            case 'standard'
+                [model, library_names] = run_standard_sindy(X_smooth, dXdt, lambda, poly_order);
+                num_active = nnz(model);
+            case 'weak'
+                [model, library_names] = run_weak_sindy(t, X, lambda, poly_order, ...
+                    'WindowPoints', window_points, 'TestFunctionOrder', test_function_order);
+                num_active = nnz(model);
+            case 'implicit'
+                [model, library_names] = run_implicit_sindy(X_smooth, dXdt, lambda, poly_order);
+                num_active = 0;
+                for d = 1:numel(model)
+                    num_active = num_active + nnz(model(d).numerator_Xi) + nnz(model(d).denominator_Xi(2:end));
+                end
         end
 
-        metrics = compute_trajectory_error(t, X, Xi, poly_order);
+        metrics = compute_trajectory_error(t, X, model, poly_order);
 
         if metrics.success
-            [t_sim, X_sim, sim_info] = simulate_trajectory(Xi, poly_order, [t(1), t(end)], X(1,:), t);
+            [t_sim, X_sim, sim_info] = simulate_trajectory(model, poly_order, [t(1), t(end)], X(1,:), t);
             dyn_class = classify_dynamics(t_sim, X_sim, sim_info);
         else
             dyn_class = 'diverged';
         end
 
         results(end+1) = struct(... %#ok<AGROW>
-            'lambda', lambda, 'poly_order', poly_order, ...
+            'variant', variant, 'lambda', lambda, 'poly_order', poly_order, ...
             'window_points', window_points, 'test_function_order', test_function_order, ...
-            'num_active_terms', nnz(Xi), 'trajectory_rmse', metrics.rmse, ...
+            'num_active_terms', num_active, 'trajectory_rmse', metrics.rmse, ...
             'normalized_rmse', metrics.normalized_rmse, 'dynamics_class', dyn_class, ...
-            'Xi', Xi, 'library_names', {library_names}, 'success', metrics.success);
+            'Xi', model, 'library_names', {library_names}, 'success', metrics.success);
 
     catch ME
         results(end+1) = struct(... %#ok<AGROW>
-            'lambda', lambda, 'poly_order', poly_order, ...
+            'variant', variant, 'lambda', lambda, 'poly_order', poly_order, ...
             'window_points', window_points, 'test_function_order', test_function_order, ...
             'num_active_terms', NaN, 'trajectory_rmse', Inf, ...
             'normalized_rmse', Inf, 'dynamics_class', 'error', ...

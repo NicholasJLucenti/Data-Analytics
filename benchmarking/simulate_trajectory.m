@@ -1,11 +1,17 @@
-function [t_sim, X_sim, sim_info] = simulate_trajectory(Xi, poly_order, t_span, x0, t_eval, varargin)
-%SIMULATE_TRAJECTORY Forward-integrate a discovered polynomial ODE model.
+function [t_sim, X_sim, sim_info] = simulate_trajectory(model, poly_order, t_span, x0, t_eval, varargin)
+%SIMULATE_TRAJECTORY Forward-integrate a discovered SINDy model, of any variant.
 %
-%   [t_sim, X_sim, sim_info] = SIMULATE_TRAJECTORY(Xi, poly_order, t_span, x0, t_eval, ...)
+%   [t_sim, X_sim, sim_info] = SIMULATE_TRAJECTORY(model, poly_order, t_span, x0, t_eval, ...)
 %
 %   Inputs:
-%     Xi         - sparse coefficient matrix (M x D) from a SINDy variant
-%     poly_order - polynomial order used to build the library Xi was fit
+%     model      - EITHER a sparse coefficient matrix (M x D) from
+%                  run_standard_sindy.m/run_weak_sindy.m (dxdt = Theta(x)*model),
+%                  OR a 1xD struct array from run_implicit_sindy.m with
+%                  .numerator_Xi/.denominator_Xi fields (dxdt(d) =
+%                  Theta(x)*numerator_Xi(d) / Theta(x)*denominator_Xi(d)).
+%                  Dispatch is automatic based on whether this is numeric
+%                  or a struct.
+%     poly_order - polynomial order used to build the library model was fit
 %                  against (must match, since the RHS is reconstructed
 %                  from libraries/build_polynomial_library.m at every step)
 %     t_span     - [t_start, t_end]
@@ -55,7 +61,7 @@ x0 = x0(:)';
 sim_info.success = true;
 sim_info.message = '';
 
-rhs = @(tt, xx) local_rhs(xx, Xi, poly_order);
+rhs = @(tt, xx) local_rhs(xx, model, poly_order);
 
 startTime = tic;
 odeOpts = odeset('RelTol', 1e-6, 'AbsTol', 1e-8, ...
@@ -100,10 +106,26 @@ end
 end
 
 
-function dxdt = local_rhs(x, Xi, poly_order)
+function dxdt = local_rhs(x, model, poly_order)
+    % model is either:
+    %   - numeric (M x D) matrix: polynomial variant (standard/weak) --
+    %     dxdt = Theta(x)*model
+    %   - struct array (1 x D) with .numerator_Xi/.denominator_Xi: implicit
+    %     variant -- dxdt(d) = Theta(x)*numerator_Xi(d) / Theta(x)*denominator_Xi(d)
     xrow = x(:)'; % build_polynomial_library expects (N x D); N=1 for a single state
     Theta_row = build_polynomial_library(xrow, poly_order);
-    dxdt = (Theta_row * Xi)';
+
+    if isstruct(model)
+        D = numel(model);
+        dxdt = zeros(D, 1);
+        for d = 1:D
+            num_val = Theta_row * model(d).numerator_Xi;
+            den_val = Theta_row * model(d).denominator_Xi;
+            dxdt(d) = num_val / den_val;
+        end
+    else
+        dxdt = (Theta_row * model)';
+    end
 end
 
 
