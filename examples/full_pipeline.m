@@ -49,11 +49,12 @@ fprintf('[INFO] Single-variant diagnostic recommendation: %s (informational -- f
     route.recommended_variant);
 
 %% 4. Sweep ALL implemented variants together
-[results, t, X, names] = run_full_search(raw, ...
-    'LambdaGrid', logspace(-2, 0, 6), ...
-    'PolyOrderGrid', [1 2 3], ...
-    'WindowPointsGrid', [11 21 31], ...
-    'TestFunctionOrderGrid', [2 4 6]);
+% 'Resolution' sets every grid at once: 'fast' for a quick pass,
+% 'balanced' (default) for routine use, 'thorough' once you trust the
+% pipeline and want the best answer -- see get_resolution_preset.m for
+% approximate combination counts per level. Any individual grid can still
+% be overridden on top of the chosen preset if needed.
+[results, t, X, names] = run_full_search(raw, 'Resolution', 'balanced');
 
 %% 5. Extract best models across ALL variants
 best = select_best_model(results, 'ErrorTolerance', 0.25, 'RequireOscillatory', true);

@@ -61,9 +61,8 @@ x0 = x0(:)';
 sim_info.success = true;
 sim_info.message = '';
 
-rhs = @(tt, xx) local_rhs(xx, model, poly_order);
-
 startTime = tic;
+rhs = @(tt, xx) local_rhs(xx, model, poly_order, startTime, opts.MaxWallSeconds);
 odeOpts = odeset('RelTol', 1e-6, 'AbsTol', 1e-8, ...
     'Events', @(tt, xx) local_divergence_event(xx, opts.DivergenceBound), ...
     'OutputFcn', @(tt, xx, flag) local_watchdog(tt, xx, flag, startTime, opts.MaxWallSeconds));
@@ -106,12 +105,28 @@ end
 end
 
 
-function dxdt = local_rhs(x, model, poly_order)
+function dxdt = local_rhs(x, model, poly_order, startTime, maxSeconds)
     % model is either:
     %   - numeric (M x D) matrix: polynomial variant (standard/weak) --
     %     dxdt = Theta(x)*model
     %   - struct array (1 x D) with .numerator_Xi/.denominator_Xi: implicit
     %     variant -- dxdt(d) = Theta(x)*numerator_Xi(d) / Theta(x)*denominator_Xi(d)
+    %
+    % This is called on EVERY derivative evaluation ode45 makes, including
+    % internal step-size retries that never become an accepted step (and
+    % therefore never trigger OutputFcn/local_watchdog below). A stiff or
+    % near-singular RHS -- e.g. a Hill denominator crossing zero when an
+    % unstable trajectory drives a state negative with an odd exponent --
+    % can make ode45 spend a long time re-attempting a single step at
+    % ever-finer resolution without ever calling OutputFcn again. Checking
+    % the wall-clock budget and rejecting non-finite output HERE, not just
+    % in OutputFcn, is what actually stops that stall: throwing aborts
+    % ode45 immediately rather than letting it grind.
+    if toc(startTime) > maxSeconds
+        error('simulate_trajectory:rhsWatchdogTimeout', ...
+            'RHS wall-clock budget (%.1fs) exceeded mid-step (likely stuck retrying near a singularity).', maxSeconds);
+    end
+
     xrow = x(:)'; % build_library expects (N x D); N=1 for a single state
     Theta_row = build_library(xrow, poly_order);
 
@@ -125,6 +140,11 @@ function dxdt = local_rhs(x, model, poly_order)
         end
     else
         dxdt = (Theta_row * model)';
+    end
+
+    if ~all(isfinite(dxdt))
+        error('simulate_trajectory:nonFiniteDerivative', ...
+            'Non-finite derivative encountered (likely a near-zero denominator or unbounded state).');
     end
 end
 

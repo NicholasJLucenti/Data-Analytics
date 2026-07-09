@@ -15,16 +15,25 @@ function [Theta, names] = build_library(X, spec)
 %     'poly_only'             - build_polynomial_library(X, spec.poly_order) only
 %     'hill_activation_only'  - constant + linear + same-species Hill activation terms
 %     'hill_repression_only'  - constant + linear + same-species Hill repression terms
-%     'hill_mixed'            - constant + linear + same-species activation
-%                                AND repression + cross-species terms
+%     'hill_mixed'            - constant + linear + same-species ACTIVATION
+%                                terms + cross-species REPRESSION terms
 %     'poly_plus_hill'        - full build_polynomial_library(X, spec.poly_order)
 %                                + hill_mixed's same/cross Hill terms
 %
 %   plus fields (required depending on flavor):
 %     .poly_order - used by 'poly_only' and 'poly_plus_hill'
-%     .hill_K     - 1xD vector of Hill saturation constants for this
-%                   combo (see libraries/estimate_hill_K_candidates.m)
+%     .hill_K     - 1xD vector of Hill saturation constants for this combo
 %     .hill_n     - scalar Hill coefficient for this combo
+%
+%   RANK DEFICIENCY NOTE: activation_i + repression_i = 1 exactly, and
+%   x_i*activation_j + x_i*repression_j = x_i exactly -- so a library that
+%   already has a constant term (every flavor here does) or the linear
+%   term x_i would be exactly rank-deficient if it included BOTH forms of
+%   the same target. 'hill_mixed' and 'poly_plus_hill' avoid this by using
+%   only activation for same-species terms and only repression for
+%   cross-species terms: this still represents both the activating and
+%   repressing biological concepts somewhere in the library, just never
+%   as an exact-redundant pair on the identical target.
 %
 %   Output: Theta, names -- exactly like build_polynomial_library.m, just
 %   assembled from whichever term sets the flavor calls for.
@@ -45,27 +54,25 @@ switch spec.flavor
 
     case 'hill_activation_only'
         [Theta_lin, names_lin] = build_polynomial_library(X, 1); % constant + linear background
-        [Theta_hill, names_hill] = build_hill_library(X, spec.hill_K, spec.hill_n, false);
-        keep = startsWith(names_hill, 'hillA');
-        Theta = [Theta_lin, Theta_hill(:, keep)];
-        names = [names_lin, names_hill(keep)];
+        [Theta_hill, names_hill] = build_hill_library(X, spec.hill_K, spec.hill_n, false, {'activation'}, {});
+        Theta = [Theta_lin, Theta_hill];
+        names = [names_lin, names_hill];
 
     case 'hill_repression_only'
         [Theta_lin, names_lin] = build_polynomial_library(X, 1);
-        [Theta_hill, names_hill] = build_hill_library(X, spec.hill_K, spec.hill_n, false);
-        keep = startsWith(names_hill, 'hillR');
-        Theta = [Theta_lin, Theta_hill(:, keep)];
-        names = [names_lin, names_hill(keep)];
+        [Theta_hill, names_hill] = build_hill_library(X, spec.hill_K, spec.hill_n, false, {'repression'}, {});
+        Theta = [Theta_lin, Theta_hill];
+        names = [names_lin, names_hill];
 
     case 'hill_mixed'
         [Theta_lin, names_lin] = build_polynomial_library(X, 1);
-        [Theta_hill, names_hill] = build_hill_library(X, spec.hill_K, spec.hill_n, true);
+        [Theta_hill, names_hill] = build_hill_library(X, spec.hill_K, spec.hill_n, true, {'activation'}, {'repression'});
         Theta = [Theta_lin, Theta_hill];
         names = [names_lin, names_hill];
 
     case 'poly_plus_hill'
         [Theta_poly, names_poly] = build_polynomial_library(X, spec.poly_order);
-        [Theta_hill, names_hill] = build_hill_library(X, spec.hill_K, spec.hill_n, true);
+        [Theta_hill, names_hill] = build_hill_library(X, spec.hill_K, spec.hill_n, true, {'activation'}, {'repression'});
         Theta = [Theta_poly, Theta_hill];
         names = [names_poly, names_hill];
 

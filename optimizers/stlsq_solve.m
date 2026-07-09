@@ -21,6 +21,18 @@ function [Xi, active_mask] = stlsq_solve(Theta, Y, lambda, max_iter)
 %     Xi          - sparse coefficient matrix (M x D)
 %     active_mask - logical (M x D) mask of which terms survived
 %
+%   Uses lsqminnorm rather than backslash (\) for every least-squares
+%   solve. For a well-conditioned Theta they agree; for a rank-deficient
+%   or ill-conditioned Theta (e.g. correlated biological channels, or
+%   candidate library terms that are exactly or nearly linearly dependent
+%   -- see libraries/build_hill_library.m's activation/repression note),
+%   backslash prints a "rank deficient" warning and returns a solution
+%   with unpredictable behavior on the dependent directions, while
+%   lsqminnorm silently returns the well-defined minimum-norm solution.
+%   This does not fix genuine collinearity in the library or the data --
+%   it just means the solver degrades gracefully instead of warning and
+%   guessing.
+%
 %   This is intentionally variant-agnostic: it's the shared core called by
 %   variants/run_standard_sindy.m, variants/run_weak_sindy.m, and
 %   selection/ensemble_sindy.m's bootstrap replicates. Keeping it in one
@@ -41,7 +53,7 @@ if size(Y, 1) ~= K
 end
 D = size(Y, 2);
 
-Xi = Theta \ Y; % initial unthresholded least-squares guess
+Xi = lsqminnorm(Theta, Y); % initial unthresholded least-squares guess
 active_mask = true(M, D);
 
 for iter = 1:max_iter
@@ -52,7 +64,7 @@ for iter = 1:max_iter
     for j = 1:D
         big = active_mask(:, j);
         if any(big)
-            Xi(big, j) = Theta(:, big) \ Y(:, j);
+            Xi(big, j) = lsqminnorm(Theta(:, big), Y(:, j));
         else
             Xi(:, j) = 0; % every candidate term pruned -- no active dynamics found
         end

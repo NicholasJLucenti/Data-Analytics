@@ -11,39 +11,35 @@ function [results, t, X, names] = run_grid_search(raw, variant, varargin)
 %     variant - 'standard', 'weak', or 'implicit'
 %
 %   Name-value options:
-%     'LambdaGrid'            - sparsity thresholds (default logspace(-2,0,5))
-%     'PolyOrderGrid'         - poly orders, used by the 'poly_only' and
-%                                'poly_plus_hill' flavors (default [1 2 3])
+%     'Resolution'            - 'fast' | 'balanced' (default) | 'thorough'.
+%                                Sets ALL the grids below at once via
+%                                get_resolution_preset.m. Any grid you
+%                                also pass explicitly overrides just that
+%                                one field on top of the preset -- e.g.
+%                                run_grid_search(raw, 'weak', 'Resolution',
+%                                'fast', 'LambdaGrid', logspace(-2,0,6))
+%                                uses the fast preset for everything
+%                                except a denser LambdaGrid.
+%     'LambdaGrid'            - sparsity thresholds to sweep
+%     'PolyOrderGrid'         - candidate library orders to sweep
 %     'WindowPointsGrid'      - (weak only) test-function window sizes
-%                                (default [15 25])
-%     'TestFunctionOrderGrid' - (weak only) test-function smoothness
-%                                orders (default [2 4])
-%     'NumDensePoints'        - densification target (default 300)
-%     'SmoothingFactor'       - (standard/implicit only) Lowess span
-%                                (default 0.2)
+%     'TestFunctionOrderGrid' - (weak only) test-function smoothness orders
+%     'NumDensePoints'        - densification target
+%     'SmoothingFactor'       - (standard/implicit only) Lowess span (default 0.2)
 %     'LibraryFlavorGrid'     - cell array of library flavors to sweep,
 %                                for standard/weak variants only (implicit
 %                                always uses 'poly_only' -- see note
-%                                below). Default {'poly_only','hill_mixed'}.
-%                                Available: 'poly_only',
+%                                below). Available: 'poly_only',
 %                                'hill_activation_only',
 %                                'hill_repression_only', 'hill_mixed',
-%                                'poly_plus_hill'. 'poly_plus_hill' is the
-%                                most expensive (combines every dimension)
-%                                and is opt-in, not in the default list.
+%                                'poly_plus_hill'.
 %     'HillCoeffGrid'         - Hill exponents n to sweep for any hill_*
-%                                flavor (default [1 2 4])
+%                                flavor
 %     'HillKCandidates'       - number of data-derived K candidate rows
-%                                (see estimate_hill_K_candidates.m),
-%                                deliberately kept small (default 3)
+%                                (see estimate_hill_K_candidates.m)
 %
-%   DEFAULTS ARE DELIBERATELY CONSERVATIVE: adding Hill flavors multiplies
-%   combinations by (|HillCoeffGrid| x HillKCandidates) on top of the
-%   existing lambda/poly/window/tfo dimensions. The defaults above keep
-%   total combination counts in the same order of magnitude as the
-%   pre-Hill defaults. Widen LambdaGrid/WindowPointsGrid/TestFunctionOrderGrid
-%   or add 'poly_plus_hill' only once you've confirmed the smaller sweep
-%   runs in acceptable time.
+%   See get_resolution_preset.m for what each Resolution level actually
+%   sets, and approximate combination counts per level.
 %
 %   IMPLICIT VARIANT NOTE: run_implicit_sindy.m's own algebra already
 %   produces rational/saturating output from a plain polynomial library;
@@ -66,16 +62,19 @@ function [results, t, X, names] = run_grid_search(raw, variant, varargin)
 %                   .dynamics_class, .Xi, .library_names, .success
 %     t, X, names - the shared densified trajectory/channel names
 
+[resolution, varargin] = local_extract_option(varargin, 'Resolution', 'balanced');
+preset = get_resolution_preset(resolution);
+
 p = inputParser;
-addParameter(p, 'LambdaGrid', logspace(-2, 0, 5), @isnumeric);
-addParameter(p, 'PolyOrderGrid', [1 2 3], @isnumeric);
-addParameter(p, 'WindowPointsGrid', [15 25], @isnumeric);
-addParameter(p, 'TestFunctionOrderGrid', [2 4], @isnumeric);
-addParameter(p, 'NumDensePoints', 300, @isnumeric);
+addParameter(p, 'LambdaGrid', preset.LambdaGrid, @isnumeric);
+addParameter(p, 'PolyOrderGrid', preset.PolyOrderGrid, @isnumeric);
+addParameter(p, 'WindowPointsGrid', preset.WindowPointsGrid, @isnumeric);
+addParameter(p, 'TestFunctionOrderGrid', preset.TestFunctionOrderGrid, @isnumeric);
+addParameter(p, 'NumDensePoints', preset.NumDensePoints, @isnumeric);
 addParameter(p, 'SmoothingFactor', 0.2, @isnumeric);
-addParameter(p, 'LibraryFlavorGrid', {'poly_only', 'hill_mixed'}, @iscell);
-addParameter(p, 'HillCoeffGrid', [1 2 4], @isnumeric);
-addParameter(p, 'HillKCandidates', 3, @isnumeric);
+addParameter(p, 'LibraryFlavorGrid', preset.LibraryFlavorGrid, @iscell);
+addParameter(p, 'HillCoeffGrid', preset.HillCoeffGrid, @isnumeric);
+addParameter(p, 'HillKCandidates', preset.HillKCandidates, @isnumeric);
 parse(p, varargin{:});
 opts = p.Results;
 
@@ -170,8 +169,8 @@ for f = 1:numel(flavorsToSweep)
 end
 
 nCombos = numel(runs);
-fprintf('[GRID SEARCH] Sweeping %d parameter combinations (%s variant, flavors: %s)...\n', ...
-    nCombos, variant, strjoin(flavorsToSweep, ', '));
+fprintf('[GRID SEARCH] Sweeping %d parameter combinations (%s variant, resolution=%s, flavors: %s)...\n', ...
+    nCombos, variant, resolution, strjoin(flavorsToSweep, ', '));
 
 results = struct('variant', {}, 'flavor', {}, 'lambda', {}, 'poly_order', {}, 'window_points', {}, ...
     'test_function_order', {}, 'hill_n', {}, 'hill_K', {}, 'library_spec', {}, ...
@@ -257,5 +256,20 @@ function v = local_getfield_default(s, fname, default)
         v = s.(fname);
     else
         v = default;
+    end
+end
+
+
+function [value, remaining] = local_extract_option(varargin_in, name, default)
+    % Pulls a single name-value pair out of a varargin cell array before
+    % the real inputParser runs, so its value can be used to pick preset
+    % DEFAULTS for the other options (which addParameter can't do, since
+    % defaults there must be fixed before parsing).
+    value = default;
+    remaining = varargin_in;
+    idx = find(strcmpi(remaining, name));
+    if ~isempty(idx)
+        value = remaining{idx(1) + 1};
+        remaining([idx(1), idx(1) + 1]) = [];
     end
 end
