@@ -38,7 +38,7 @@ if ~isequal(size(dXdt), [N, D])
         'dXdt must be the same size as X (%d x %d).', N, D);
 end
 
-[L, library_names] = build_polynomial_library(X, poly_order);
+[L, library_names] = build_library(X, poly_order);
 Y = dXdt;
 
 Xi = stlsq_solve(L, Y, lambda, 10);

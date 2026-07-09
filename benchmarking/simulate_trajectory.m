@@ -112,8 +112,8 @@ function dxdt = local_rhs(x, model, poly_order)
     %     dxdt = Theta(x)*model
     %   - struct array (1 x D) with .numerator_Xi/.denominator_Xi: implicit
     %     variant -- dxdt(d) = Theta(x)*numerator_Xi(d) / Theta(x)*denominator_Xi(d)
-    xrow = x(:)'; % build_polynomial_library expects (N x D); N=1 for a single state
-    Theta_row = build_polynomial_library(xrow, poly_order);
+    xrow = x(:)'; % build_library expects (N x D); N=1 for a single state
+    Theta_row = build_library(xrow, poly_order);
 
     if isstruct(model)
         D = numel(model);

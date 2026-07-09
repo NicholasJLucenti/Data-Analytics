@@ -81,7 +81,7 @@ for d = 1:D
 
     for c = 1:numel(candidates)
         r = candidates(c).result;
-        [t_sim, X_sim, sim_info] = simulate_trajectory(r.Xi, r.poly_order, [t(1), t(end)], X(1, :), t, ...
+        [t_sim, X_sim, sim_info] = simulate_trajectory(r.Xi, r.library_spec, [t(1), t(end)], X(1, :), t, ...
             'MaxWallSeconds', opts.MaxWallSeconds);
 
         if sim_info.success && size(X_sim, 1) == numel(t)

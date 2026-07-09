@@ -109,7 +109,7 @@ centerIdx = unique(round(linspace(minIdx, maxIdx, numTF)));
 numTF = numel(centerIdx);
 
 %% 2. Build the full candidate library once, evaluated at every grid point
-[Theta_full, library_names] = build_polynomial_library(X, poly_order);
+[Theta_full, library_names] = build_library(X, poly_order);
 M = size(Theta_full, 2);
 
 %% 3. Assemble the weak-form linear system: one row per test function

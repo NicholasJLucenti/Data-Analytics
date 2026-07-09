@@ -1,8 +1,8 @@
 function [results, t, X, names] = run_grid_search(raw, variant, varargin)
-%RUN_GRID_SEARCH Sweep SINDy hyperparameters and score every resulting
-%model, so a downstream selection step (select_best_model.m) can pick
-%among competing trade-offs -- sparsest, lowest trajectory error,
-%topology-preserving -- instead of committing to one fixed-parameter fit.
+%RUN_GRID_SEARCH Sweep SINDy hyperparameters -- including candidate
+%library flavor -- and score every resulting model, so a downstream
+%selection step (select_best_model.m) can pick among competing
+%trade-offs instead of committing to one fixed-parameter fit.
 %
 %   [results, t, X, names] = RUN_GRID_SEARCH(raw, variant, ...)
 %
@@ -11,53 +11,71 @@ function [results, t, X, names] = run_grid_search(raw, variant, varargin)
 %     variant - 'standard', 'weak', or 'implicit'
 %
 %   Name-value options:
-%     'LambdaGrid'            - sparsity thresholds to sweep
-%                                (default logspace(-2, 0, 8))
-%     'PolyOrderGrid'         - candidate library orders to sweep
-%                                (default [1 2 3])
+%     'LambdaGrid'            - sparsity thresholds (default logspace(-2,0,5))
+%     'PolyOrderGrid'         - poly orders, used by the 'poly_only' and
+%                                'poly_plus_hill' flavors (default [1 2 3])
 %     'WindowPointsGrid'      - (weak only) test-function window sizes
-%                                (default [11 21 31])
+%                                (default [15 25])
 %     'TestFunctionOrderGrid' - (weak only) test-function smoothness
-%                                orders (default [2 4 6])
-%     'NumDensePoints'        - densification target for
-%                                align_and_truncate (default 300)
+%                                orders (default [2 4])
+%     'NumDensePoints'        - densification target (default 300)
 %     'SmoothingFactor'       - (standard/implicit only) Lowess span
-%                                fraction (default 0.2)
+%                                (default 0.2)
+%     'LibraryFlavorGrid'     - cell array of library flavors to sweep,
+%                                for standard/weak variants only (implicit
+%                                always uses 'poly_only' -- see note
+%                                below). Default {'poly_only','hill_mixed'}.
+%                                Available: 'poly_only',
+%                                'hill_activation_only',
+%                                'hill_repression_only', 'hill_mixed',
+%                                'poly_plus_hill'. 'poly_plus_hill' is the
+%                                most expensive (combines every dimension)
+%                                and is opt-in, not in the default list.
+%     'HillCoeffGrid'         - Hill exponents n to sweep for any hill_*
+%                                flavor (default [1 2 4])
+%     'HillKCandidates'       - number of data-derived K candidate rows
+%                                (see estimate_hill_K_candidates.m),
+%                                deliberately kept small (default 3)
+%
+%   DEFAULTS ARE DELIBERATELY CONSERVATIVE: adding Hill flavors multiplies
+%   combinations by (|HillCoeffGrid| x HillKCandidates) on top of the
+%   existing lambda/poly/window/tfo dimensions. The defaults above keep
+%   total combination counts in the same order of magnitude as the
+%   pre-Hill defaults. Widen LambdaGrid/WindowPointsGrid/TestFunctionOrderGrid
+%   or add 'poly_plus_hill' only once you've confirmed the smaller sweep
+%   runs in acceptable time.
+%
+%   IMPLICIT VARIANT NOTE: run_implicit_sindy.m's own algebra already
+%   produces rational/saturating output from a plain polynomial library;
+%   layering Hill terms underneath an already-implicit formulation adds
+%   interpretive complexity without a clear benefit, so the implicit
+%   variant always sweeps 'poly_only' regardless of LibraryFlavorGrid.
 %
 %   Output:
 %     results - struct array, one entry per parameter combination:
-%                 .variant           - which variant produced this row
-%                 .lambda, .poly_order, .window_points, .test_function_order
-%                   (window_points/test_function_order are NaN for
-%                   standard/implicit, which don't use them)
-%                 .num_active_terms  - sparsity count. nnz(Xi) for
-%                   standard/weak; for implicit, the number of nonzero
-%                   numerator coefficients plus nonzero denominator
-%                   coefficients EXCLUDING the structurally-fixed
-%                   constant term (see run_implicit_sindy.m)
-%                 .trajectory_rmse   - from compute_trajectory_error.m
-%                 .normalized_rmse   - scale-free version of the above
-%                 .dynamics_class    - from classify_dynamics.m
-%                 .Xi                - the fitted model itself: a
-%                   coefficient matrix for standard/weak, or a 1xD
-%                   rational struct array (see run_implicit_sindy.m) for
-%                   implicit. benchmarking/simulate_trajectory.m dispatches
-%                   on this automatically, so callers generally don't
-%                   need to care which shape they got.
-%                 .library_names     - candidate term names
-%                 .success           - false if this combination errored
-%                                       or failed to simulate
-%     t, X, names - the shared densified trajectory/channel names used to
-%                   score every candidate (from align_and_truncate.m),
-%                   returned so callers don't have to recompute them
+%                 .variant, .flavor
+%                 .lambda, .poly_order (NaN for hill_activation_only/
+%                   hill_repression_only/hill_mixed, which don't use it),
+%                   .window_points, .test_function_order (NaN unless variant=='weak')
+%                 .hill_n, .hill_K (NaN/[] for 'poly_only')
+%                 .library_spec      - the EXACT spec (numeric poly_order,
+%                   or Hill-flavor struct) passed to the variant function.
+%                   Use this (not .poly_order) to reconstruct/re-simulate
+%                   the model -- the other fields above are for display only.
+%                 .num_active_terms, .trajectory_rmse, .normalized_rmse,
+%                   .dynamics_class, .Xi, .library_names, .success
+%     t, X, names - the shared densified trajectory/channel names
 
 p = inputParser;
-addParameter(p, 'LambdaGrid', logspace(-2, 0, 8), @isnumeric);
+addParameter(p, 'LambdaGrid', logspace(-2, 0, 5), @isnumeric);
 addParameter(p, 'PolyOrderGrid', [1 2 3], @isnumeric);
-addParameter(p, 'WindowPointsGrid', [11 21 31], @isnumeric);
-addParameter(p, 'TestFunctionOrderGrid', [2 4 6], @isnumeric);
+addParameter(p, 'WindowPointsGrid', [15 25], @isnumeric);
+addParameter(p, 'TestFunctionOrderGrid', [2 4], @isnumeric);
 addParameter(p, 'NumDensePoints', 300, @isnumeric);
 addParameter(p, 'SmoothingFactor', 0.2, @isnumeric);
+addParameter(p, 'LibraryFlavorGrid', {'poly_only', 'hill_mixed'}, @iscell);
+addParameter(p, 'HillCoeffGrid', [1 2 4], @isnumeric);
+addParameter(p, 'HillKCandidates', 3, @isnumeric);
 parse(p, varargin{:});
 opts = p.Results;
 
@@ -74,69 +92,151 @@ if needsDerivatives
     dXdt = compute_derivatives(t, X_smooth);
 end
 
-%% Build the parameter grid
-if strcmp(variant, 'weak')
-    [lambdaGrid, polyGrid, winGrid, tfoGrid] = ndgrid(opts.LambdaGrid, opts.PolyOrderGrid, ...
-        opts.WindowPointsGrid, opts.TestFunctionOrderGrid);
-    combos = [lambdaGrid(:), polyGrid(:), winGrid(:), tfoGrid(:)];
+K_candidates = estimate_hill_K_candidates(X, opts.HillKCandidates); % (numK x D), data-derived
+numK = size(K_candidates, 1);
+
+if strcmp(variant, 'implicit')
+    flavorsToSweep = {'poly_only'};
 else
-    [lambdaGrid, polyGrid] = ndgrid(opts.LambdaGrid, opts.PolyOrderGrid);
-    combos = [lambdaGrid(:), polyGrid(:), nan(numel(lambdaGrid), 2)];
+    flavorsToSweep = opts.LibraryFlavorGrid;
 end
-nCombos = size(combos, 1);
 
-fprintf('[GRID SEARCH] Sweeping %d parameter combinations (%s variant)...\n', nCombos, variant);
+if strcmp(variant, 'weak')
+    windowList = opts.WindowPointsGrid;
+    tfoList = opts.TestFunctionOrderGrid;
+else
+    windowList = NaN;
+    tfoList = NaN;
+end
 
-results = struct('variant', {}, 'lambda', {}, 'poly_order', {}, 'window_points', {}, 'test_function_order', {}, ...
+%% Build the flat list of runs -- different flavors sweep different
+%% sub-grids (poly_order only applies to poly_only/poly_plus_hill; K/n
+%% only apply to hill_* flavors), so this is assembled explicitly per
+%% flavor rather than forced into one rectangular ndgrid.
+runs = struct('lambda', {}, 'library_spec', {}, 'window_points', {}, 'test_function_order', {}, 'flavor', {});
+
+for f = 1:numel(flavorsToSweep)
+    flavor = flavorsToSweep{f};
+
+    switch flavor
+        case 'poly_only'
+            for lam = opts.LambdaGrid
+                for po = opts.PolyOrderGrid
+                    for wp = windowList
+                        for tf = tfoList
+                            runs(end+1) = struct('lambda', lam, 'library_spec', po, ...
+                                'window_points', wp, 'test_function_order', tf, 'flavor', flavor); %#ok<AGROW>
+                        end
+                    end
+                end
+            end
+
+        case {'hill_activation_only', 'hill_repression_only', 'hill_mixed'}
+            for lam = opts.LambdaGrid
+                for hn = opts.HillCoeffGrid
+                    for ki = 1:numK
+                        spec = struct('flavor', flavor, 'hill_K', K_candidates(ki, :), 'hill_n', hn);
+                        for wp = windowList
+                            for tf = tfoList
+                                runs(end+1) = struct('lambda', lam, 'library_spec', spec, ...
+                                    'window_points', wp, 'test_function_order', tf, 'flavor', flavor); %#ok<AGROW>
+                            end
+                        end
+                    end
+                end
+            end
+
+        case 'poly_plus_hill'
+            for lam = opts.LambdaGrid
+                for po = opts.PolyOrderGrid
+                    for hn = opts.HillCoeffGrid
+                        for ki = 1:numK
+                            spec = struct('flavor', flavor, 'poly_order', po, ...
+                                'hill_K', K_candidates(ki, :), 'hill_n', hn);
+                            for wp = windowList
+                                for tf = tfoList
+                                    runs(end+1) = struct('lambda', lam, 'library_spec', spec, ...
+                                        'window_points', wp, 'test_function_order', tf, 'flavor', flavor); %#ok<AGROW>
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+        otherwise
+            error('run_grid_search:badFlavor', 'Unknown flavor in LibraryFlavorGrid: %s', flavor);
+    end
+end
+
+nCombos = numel(runs);
+fprintf('[GRID SEARCH] Sweeping %d parameter combinations (%s variant, flavors: %s)...\n', ...
+    nCombos, variant, strjoin(flavorsToSweep, ', '));
+
+results = struct('variant', {}, 'flavor', {}, 'lambda', {}, 'poly_order', {}, 'window_points', {}, ...
+    'test_function_order', {}, 'hill_n', {}, 'hill_K', {}, 'library_spec', {}, ...
     'num_active_terms', {}, 'trajectory_rmse', {}, 'normalized_rmse', {}, 'dynamics_class', {}, ...
     'Xi', {}, 'library_names', {}, 'success', {});
 
 progressStep = max(1, round(nCombos / 10));
 
 for c = 1:nCombos
-    lambda = combos(c, 1);
-    poly_order = combos(c, 2);
-    window_points = combos(c, 3);
-    test_function_order = combos(c, 4);
+    run_c = runs(c);
+    lambda = run_c.lambda;
+    spec = run_c.library_spec; % numeric poly_order, OR a Hill-flavor struct
+    window_points = run_c.window_points;
+    test_function_order = run_c.test_function_order;
+
+    if isnumeric(spec)
+        poly_order_field = spec;
+        hill_n_field = NaN;
+        hill_K_field = [];
+    else
+        poly_order_field = local_getfield_default(spec, 'poly_order', NaN);
+        hill_n_field = spec.hill_n;
+        hill_K_field = spec.hill_K;
+    end
 
     try
         switch variant
             case 'standard'
-                [model, library_names] = run_standard_sindy(X_smooth, dXdt, lambda, poly_order);
+                [model, library_names] = run_standard_sindy(X_smooth, dXdt, lambda, spec);
                 num_active = nnz(model);
             case 'weak'
-                [model, library_names] = run_weak_sindy(t, X, lambda, poly_order, ...
+                [model, library_names] = run_weak_sindy(t, X, lambda, spec, ...
                     'WindowPoints', window_points, 'TestFunctionOrder', test_function_order);
                 num_active = nnz(model);
             case 'implicit'
-                [model, library_names] = run_implicit_sindy(X_smooth, dXdt, lambda, poly_order);
+                [model, library_names] = run_implicit_sindy(X_smooth, dXdt, lambda, spec);
                 num_active = 0;
                 for d = 1:numel(model)
                     num_active = num_active + nnz(model(d).numerator_Xi) + nnz(model(d).denominator_Xi(2:end));
                 end
         end
 
-        metrics = compute_trajectory_error(t, X, model, poly_order);
+        metrics = compute_trajectory_error(t, X, model, spec);
 
         if metrics.success
-            [t_sim, X_sim, sim_info] = simulate_trajectory(model, poly_order, [t(1), t(end)], X(1,:), t);
+            [t_sim, X_sim, sim_info] = simulate_trajectory(model, spec, [t(1), t(end)], X(1, :), t);
             dyn_class = classify_dynamics(t_sim, X_sim, sim_info);
         else
             dyn_class = 'diverged';
         end
 
         results(end+1) = struct(... %#ok<AGROW>
-            'variant', variant, 'lambda', lambda, 'poly_order', poly_order, ...
-            'window_points', window_points, 'test_function_order', test_function_order, ...
-            'num_active_terms', num_active, 'trajectory_rmse', metrics.rmse, ...
+            'variant', variant, 'flavor', run_c.flavor, 'lambda', lambda, ...
+            'poly_order', poly_order_field, 'window_points', window_points, ...
+            'test_function_order', test_function_order, 'hill_n', hill_n_field, 'hill_K', hill_K_field, ...
+            'library_spec', spec, 'num_active_terms', num_active, 'trajectory_rmse', metrics.rmse, ...
             'normalized_rmse', metrics.normalized_rmse, 'dynamics_class', dyn_class, ...
             'Xi', model, 'library_names', {library_names}, 'success', metrics.success);
 
     catch ME
         results(end+1) = struct(... %#ok<AGROW>
-            'variant', variant, 'lambda', lambda, 'poly_order', poly_order, ...
-            'window_points', window_points, 'test_function_order', test_function_order, ...
-            'num_active_terms', NaN, 'trajectory_rmse', Inf, ...
+            'variant', variant, 'flavor', run_c.flavor, 'lambda', lambda, ...
+            'poly_order', poly_order_field, 'window_points', window_points, ...
+            'test_function_order', test_function_order, 'hill_n', hill_n_field, 'hill_K', hill_K_field, ...
+            'library_spec', spec, 'num_active_terms', NaN, 'trajectory_rmse', Inf, ...
             'normalized_rmse', Inf, 'dynamics_class', 'error', ...
             'Xi', [], 'library_names', {{}}, 'success', false);
         fprintf('  [WARN] combo %d/%d failed: %s\n', c, nCombos, ME.message);
@@ -149,4 +249,13 @@ end
 
 fprintf('[GRID SEARCH] Done. %d/%d combinations succeeded.\n', sum([results.success]), nCombos);
 
+end
+
+
+function v = local_getfield_default(s, fname, default)
+    if isfield(s, fname)
+        v = s.(fname);
+    else
+        v = default;
+    end
 end
