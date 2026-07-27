@@ -8,36 +8,37 @@ function [Xi, active_mask] = stlsq_solve(Theta, Y, lambda, max_iter)
 %   coefficient matrix.
 %
 %   Inputs:
-%     Theta    - library/design matrix (K x M). K is "rows of evidence" --
-%                for standard SINDy these are time samples; for weak-form
-%                SINDy these are test-function integrals. The solver
-%                itself doesn't care which.
-%     Y        - target matrix (K x D) -- derivatives for standard SINDy,
-%                integrated derivative terms for weak-form SINDy.
+%     Theta    - library/design matrix (K x M)
+%     Y        - target matrix (K x D)
 %     lambda   - hard sparsity threshold (default 0.1)
 %     max_iter - number of thresholding iterations (default 10)
 %
 %   Outputs:
-%     Xi          - sparse coefficient matrix (M x D)
+%     Xi          - sparse coefficient matrix (M x D), in Theta's ORIGINAL units
 %     active_mask - logical (M x D) mask of which terms survived
 %
+%   COLUMN NORMALIZATION: lambda is a single global cutoff, so without
+%   normalization it implicitly favors/penalizes terms based on their raw
+%   numeric scale rather than their actual contribution. This matters a
+%   lot for run_implicit_sindy.m, whose design matrix mixes numerator
+%   terms (~x^k) with interaction terms (~x^k * dxdt) that can differ by
+%   orders of magnitude -- a uniform threshold on unnormalized
+%   coefficients can leave a poorly-conditioned (near-zero-crossing)
+%   denominator purely as a scale artifact. Each column of Theta is
+%   normalized to unit L2 norm before thresholding, and coefficients are
+%   rescaled back to Theta's original units once at the end -- so lambda
+%   always means "this term's normalized-scale contribution is small",
+%   consistently across every variant that calls this solver.
+%
 %   Uses lsqminnorm rather than backslash (\) for every least-squares
-%   solve. For a well-conditioned Theta they agree; for a rank-deficient
-%   or ill-conditioned Theta (e.g. correlated biological channels, or
-%   candidate library terms that are exactly or nearly linearly dependent
-%   -- see libraries/build_hill_library.m's activation/repression note),
-%   backslash prints a "rank deficient" warning and returns a solution
-%   with unpredictable behavior on the dependent directions, while
-%   lsqminnorm silently returns the well-defined minimum-norm solution.
-%   This does not fix genuine collinearity in the library or the data --
-%   it just means the solver degrades gracefully instead of warning and
-%   guessing.
+%   solve, so a rank-deficient or ill-conditioned Theta degrades
+%   gracefully (well-defined minimum-norm solution) instead of printing a
+%   warning and returning an unpredictable result.
 %
 %   This is intentionally variant-agnostic: it's the shared core called by
-%   variants/run_standard_sindy.m, variants/run_weak_sindy.m, and
-%   selection/ensemble_sindy.m's bootstrap replicates. Keeping it in one
-%   place means a change to the sparsification strategy (e.g. swapping in
-%   SR3, or a different thresholding schedule) only has to happen once.
+%   variants/run_standard_sindy.m, variants/run_weak_sindy.m,
+%   variants/run_implicit_sindy.m, and selection/ensemble_sindy.m's
+%   bootstrap replicates.
 
 if nargin < 4 || isempty(max_iter)
     max_iter = 10;
@@ -53,22 +54,28 @@ if size(Y, 1) ~= K
 end
 D = size(Y, 2);
 
-Xi = lsqminnorm(Theta, Y); % initial unthresholded least-squares guess
+colNorms = sqrt(sum(Theta.^2, 1));
+colNorms(colNorms == 0) = 1; % guard an all-zero column (shouldn't occur in practice)
+Theta_n = Theta ./ colNorms;
+
+Xi_n = lsqminnorm(Theta_n, Y); % initial unthresholded least-squares guess, normalized scale
 active_mask = true(M, D);
 
 for iter = 1:max_iter
-    small = abs(Xi) < lambda;
-    Xi(small) = 0;
+    small = abs(Xi_n) < lambda;
+    Xi_n(small) = 0;
     active_mask = ~small;
 
     for j = 1:D
         big = active_mask(:, j);
         if any(big)
-            Xi(big, j) = lsqminnorm(Theta(:, big), Y(:, j));
+            Xi_n(big, j) = lsqminnorm(Theta_n(:, big), Y(:, j));
         else
-            Xi(:, j) = 0; % every candidate term pruned -- no active dynamics found
+            Xi_n(:, j) = 0; % every candidate term pruned -- no active dynamics found
         end
     end
 end
+
+Xi = Xi_n ./ colNorms'; % rescale back to Theta's original units
 
 end

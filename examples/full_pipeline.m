@@ -10,7 +10,7 @@ mrnaValueFile = fullfile(dataDir, 'Hes1mRNAData.mat');
 mrnaTimeFile  = fullfile(dataDir, 'Hes1mRNATime.mat');
 protValueFile = fullfile(dataDir, 'Hes1Data.mat');
 protTimeFile  = fullfile(dataDir, 'Hes1Time.mat');
-
+warning('off', 'run_implicit_sindy:nearSingularDenominator');
 %% 1. Load raw data
 mRNA_val = load(mrnaValueFile);
 mRNA_t   = load(mrnaTimeFile);
