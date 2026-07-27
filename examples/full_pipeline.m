@@ -5,7 +5,7 @@
 clear; clc; close all;
 
 %% 0. Configuration
-dataDir = fullfile(pwd, 'data');
+dataDir = 'C:\Users\nickj\MATLAB Drive\Data-Analytics\data\';
 mrnaValueFile = fullfile(dataDir, 'Hes1mRNAData.mat');
 mrnaTimeFile  = fullfile(dataDir, 'Hes1mRNATime.mat');
 protValueFile = fullfile(dataDir, 'Hes1Data.mat');
