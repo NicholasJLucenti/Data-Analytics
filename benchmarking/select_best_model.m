@@ -29,7 +29,9 @@ function best = select_best_model(results, varargin)
 %                             successful runs
 %     .sparsest             - fewest num_active_terms among results
 %                             within ErrorTolerance of the best RMSE
-%     .topology_preserving  - lowest RMSE among results classified
+%     .topology_preserving  - best period match (lowest period_error,
+%                             via benchmarking/estimate_trajectory_period.m)
+%                             among results classified
 %                             'oscillatory' ([] if none found)
 %     .all_valid            - the filtered results actually used
 %                             (success == true, finite RMSE), for any
@@ -67,8 +69,23 @@ if opts.RequireOscillatory
         warning('select_best_model:noOscillatoryModel', ...
             'No swept model sustained oscillatory dynamics under forward simulation.');
     else
-        oscRmse = [oscCandidates.trajectory_rmse];
-        [~, oscLocalIdx] = min(oscRmse);
+        periodErrs = [oscCandidates.period_error];
+        if all(~isfinite(periodErrs))
+            % No oscillatory candidate had a usable period estimate (e.g.
+            % the real data itself has no clear dominant frequency) --
+            % fall back to the previous RMSE-based pick rather than
+            % failing outright.
+            oscRmse = [oscCandidates.trajectory_rmse];
+            [~, oscLocalIdx] = min(oscRmse);
+            warning('select_best_model:noPeriodInfo', ...
+                'No oscillatory candidate had a usable period estimate; falling back to lowest RMSE among oscillatory models.');
+        else
+            % min() ignores NaN automatically, so "no period estimate"
+            % candidates are excluded rather than winning by default; Inf
+            % (diverged, or a period found but drastically mismatched)
+            % naturally ranks last among the rest.
+            [~, oscLocalIdx] = min(periodErrs);
+        end
         best.topology_preserving = oscCandidates(oscLocalIdx);
     end
 else

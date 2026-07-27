@@ -94,6 +94,8 @@ end
 K_candidates = estimate_hill_K_candidates(X, opts.HillKCandidates); % (numK x D), data-derived
 numK = size(K_candidates, 1);
 
+real_period = estimate_trajectory_period(t, X); % shared target for every combo's period_error below
+
 if strcmp(variant, 'implicit')
     flavorsToSweep = {'poly_only'};
 else
@@ -175,7 +177,7 @@ fprintf('[GRID SEARCH] Sweeping %d parameter combinations (%s variant, resolutio
 results = struct('variant', {}, 'flavor', {}, 'lambda', {}, 'poly_order', {}, 'window_points', {}, ...
     'test_function_order', {}, 'hill_n', {}, 'hill_K', {}, 'library_spec', {}, ...
     'num_active_terms', {}, 'trajectory_rmse', {}, 'normalized_rmse', {}, 'dynamics_class', {}, ...
-    'Xi', {}, 'library_names', {}, 'success', {});
+    'period_error', {}, 'Xi', {}, 'library_names', {}, 'success', {});
 
 progressStep = max(1, round(nCombos / 10));
 
@@ -218,8 +220,15 @@ for c = 1:nCombos
         if metrics.success
             [t_sim, X_sim, sim_info] = simulate_trajectory(model, spec, [t(1), t(end)], X(1, :), t);
             dyn_class = classify_dynamics(t_sim, X_sim, sim_info);
+            sim_period = estimate_trajectory_period(t_sim, X_sim);
+            if isfinite(sim_period.mean_period) && isfinite(real_period.mean_period) && real_period.mean_period > 0
+                period_error = abs(sim_period.mean_period - real_period.mean_period) / real_period.mean_period;
+            else
+                period_error = NaN; % model has no clear period (fixed point, etc.) -- not comparable
+            end
         else
             dyn_class = 'diverged';
+            period_error = Inf; % diverged -- treat as maximally period-mismatched, not "not comparable"
         end
 
         results(end+1) = struct(... %#ok<AGROW>
@@ -228,7 +237,7 @@ for c = 1:nCombos
             'test_function_order', test_function_order, 'hill_n', hill_n_field, 'hill_K', hill_K_field, ...
             'library_spec', spec, 'num_active_terms', num_active, 'trajectory_rmse', metrics.rmse, ...
             'normalized_rmse', metrics.normalized_rmse, 'dynamics_class', dyn_class, ...
-            'Xi', model, 'library_names', {library_names}, 'success', metrics.success);
+            'period_error', period_error, 'Xi', model, 'library_names', {library_names}, 'success', metrics.success);
 
     catch ME
         results(end+1) = struct(... %#ok<AGROW>
@@ -237,7 +246,7 @@ for c = 1:nCombos
             'test_function_order', test_function_order, 'hill_n', hill_n_field, 'hill_K', hill_K_field, ...
             'library_spec', spec, 'num_active_terms', NaN, 'trajectory_rmse', Inf, ...
             'normalized_rmse', Inf, 'dynamics_class', 'error', ...
-            'Xi', [], 'library_names', {{}}, 'success', false);
+            'period_error', Inf, 'Xi', [], 'library_names', {{}}, 'success', false);
         fprintf('  [WARN] combo %d/%d failed: %s\n', c, nCombos, ME.message);
     end
 
