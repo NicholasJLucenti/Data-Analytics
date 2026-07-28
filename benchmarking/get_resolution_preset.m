@@ -29,7 +29,7 @@ function opts = get_resolution_preset(level)
 %
 %   Output: opts struct with fields matching run_grid_search.m's
 %   name-value options: LambdaGrid, PolyOrderGrid, WindowPointsGrid,
-%   TestFunctionOrderGrid, HillCoeffGrid, HillKCandidates, NumDensePoints,
+%   TestFunctionOrderGrid, LagOrderGrid, HillCoeffGrid, HillKCandidates, NumDensePoints,
 %   LibraryFlavorGrid.
 
 switch level
@@ -38,6 +38,7 @@ switch level
         opts.PolyOrderGrid = [1 2];
         opts.WindowPointsGrid = 20;
         opts.TestFunctionOrderGrid = 4;
+        opts.LagOrderGrid = [1 2];
         opts.HillCoeffGrid = [1 2];
         opts.HillKCandidates = 2;
         opts.NumDensePoints = 200;
@@ -48,6 +49,7 @@ switch level
         opts.PolyOrderGrid = [1 2 3];
         opts.WindowPointsGrid = [15 25];
         opts.TestFunctionOrderGrid = [2 4];
+        opts.LagOrderGrid = [1 2 3];
         opts.HillCoeffGrid = [1 2 4];
         opts.HillKCandidates = 3;
         opts.NumDensePoints = 300;
@@ -58,6 +60,7 @@ switch level
         opts.PolyOrderGrid = [1 2 3];
         opts.WindowPointsGrid = [15 22 30];
         opts.TestFunctionOrderGrid = [2 4 6];
+        opts.LagOrderGrid = [1 2 3 4];
         opts.HillCoeffGrid = [1 2 4];
         opts.HillKCandidates = 4;
         opts.NumDensePoints = 400;

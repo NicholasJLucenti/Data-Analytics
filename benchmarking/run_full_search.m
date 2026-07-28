@@ -1,7 +1,8 @@
 function [results, t, X, names] = run_full_search(raw, varargin)
 %RUN_FULL_SEARCH Sweep every implemented SINDy variant (standard, weak,
-%implicit), each across its own library-flavor grid (plain polynomial and
-%Hill/saturation flavors), and merge into one combined results table.
+%implicit, narmax), each across its own relevant grid (library flavor for
+%standard/weak, lag order for narmax), and merge into one combined
+%results table.
 %
 %   [results, t, X, names] = RUN_FULL_SEARCH(raw, ...)
 %
@@ -9,18 +10,16 @@ function [results, t, X, names] = run_full_search(raw, varargin)
 %     'Resolution' - 'fast' | 'balanced' (default) | 'thorough'. Sets ALL
 %                     grid defaults at once via get_resolution_preset.m;
 %                     any grid also passed explicitly overrides just that
-%                     field. E.g. run_full_search(raw, 'Resolution', 'fast')
-%                     for a quick pass, or 'thorough' once you trust the
-%                     pipeline and want the best answer. See
-%                     get_resolution_preset.m for approximate combination
-%                     counts per level.
+%                     field. See get_resolution_preset.m for approximate
+%                     combination counts per level.
 %     'LambdaGrid', 'PolyOrderGrid', 'WindowPointsGrid',
-%     'TestFunctionOrderGrid', 'NumDensePoints', 'SmoothingFactor',
-%     'LibraryFlavorGrid', 'HillCoeffGrid', 'HillKCandidates'
+%     'TestFunctionOrderGrid', 'LagOrderGrid', 'NumDensePoints',
+%     'SmoothingFactor', 'LibraryFlavorGrid', 'HillCoeffGrid',
+%     'HillKCandidates'
 %         - forwarded to run_grid_search.m for each variant; override
 %           individual fields of whichever Resolution preset is active
 %     'Variants' - cell array of variant names to sweep
-%                  (default {'standard', 'weak', 'implicit'})
+%                  (default {'standard', 'weak', 'implicit', 'narmax'})
 %
 %   Output:
 %     results - merged struct array from every swept variant, each entry
@@ -37,17 +36,18 @@ addParameter(p, 'LambdaGrid', preset.LambdaGrid, @isnumeric);
 addParameter(p, 'PolyOrderGrid', preset.PolyOrderGrid, @isnumeric);
 addParameter(p, 'WindowPointsGrid', preset.WindowPointsGrid, @isnumeric);
 addParameter(p, 'TestFunctionOrderGrid', preset.TestFunctionOrderGrid, @isnumeric);
+addParameter(p, 'LagOrderGrid', preset.LagOrderGrid, @isnumeric);
 addParameter(p, 'NumDensePoints', preset.NumDensePoints, @isnumeric);
 addParameter(p, 'SmoothingFactor', 0.2, @isnumeric);
 addParameter(p, 'LibraryFlavorGrid', preset.LibraryFlavorGrid, @iscell);
 addParameter(p, 'HillCoeffGrid', preset.HillCoeffGrid, @isnumeric);
 addParameter(p, 'HillKCandidates', preset.HillKCandidates, @isnumeric);
-addParameter(p, 'Variants', {'standard', 'weak', 'implicit'}, @iscell);
+addParameter(p, 'Variants', {'standard', 'weak', 'implicit', 'narmax'}, @iscell);
 parse(p, varargin{:});
 opts = p.Results;
 
 results = struct('variant', {}, 'flavor', {}, 'lambda', {}, 'poly_order', {}, 'window_points', {}, ...
-    'test_function_order', {}, 'hill_n', {}, 'hill_K', {}, 'library_spec', {}, ...
+    'test_function_order', {}, 'lag_order', {}, 'hill_n', {}, 'hill_K', {}, 'library_spec', {}, ...
     'num_active_terms', {}, 'trajectory_rmse', {}, 'normalized_rmse', {}, 'dynamics_class', {}, ...
     'period_error', {}, 'Xi', {}, 'library_names', {}, 'success', {});
 
@@ -63,6 +63,7 @@ for i = 1:numel(opts.Variants)
     [r, t, X, names] = run_grid_search(raw, variant, ...
         'LambdaGrid', opts.LambdaGrid, 'PolyOrderGrid', opts.PolyOrderGrid, ...
         'WindowPointsGrid', opts.WindowPointsGrid, 'TestFunctionOrderGrid', opts.TestFunctionOrderGrid, ...
+        'LagOrderGrid', opts.LagOrderGrid, ...
         'NumDensePoints', opts.NumDensePoints, 'SmoothingFactor', opts.SmoothingFactor, ...
         'LibraryFlavorGrid', opts.LibraryFlavorGrid, 'HillCoeffGrid', opts.HillCoeffGrid, ...
         'HillKCandidates', opts.HillKCandidates);

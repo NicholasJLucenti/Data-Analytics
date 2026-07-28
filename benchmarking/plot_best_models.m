@@ -81,8 +81,13 @@ for d = 1:D
 
     for c = 1:numel(candidates)
         r = candidates(c).result;
-        [t_sim, X_sim, sim_info] = simulate_trajectory(r.Xi, r.library_spec, [t(1), t(end)], X(1, :), t, ...
-            'MaxWallSeconds', opts.MaxWallSeconds);
+        if isfield(r, 'variant') && strcmp(r.variant, 'narmax')
+            [t_sim, X_sim, sim_info] = simulate_narmax_trajectory(r.Xi, r.lag_order, r.library_spec, t, ...
+                X(1:r.lag_order, :), 'MaxWallSeconds', opts.MaxWallSeconds);
+        else
+            [t_sim, X_sim, sim_info] = simulate_trajectory(r.Xi, r.library_spec, [t(1), t(end)], X(1, :), t, ...
+                'MaxWallSeconds', opts.MaxWallSeconds);
+        end
 
         if sim_info.success && size(X_sim, 1) == numel(t)
             plot(t_sim, X_sim(:, d), '--', 'Color', candidates(c).color, 'LineWidth', 1.75, ...
