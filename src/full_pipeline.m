@@ -81,13 +81,20 @@ end
 %% 6. Sparsity-vs-error trade-off across the whole valid sweep, colored by variant
 figure('Name', 'Full Search: Sparsity vs. Trajectory Error by Variant');
 hold on;
-variantColors = containers.Map({'standard', 'weak', 'implicit'}, {[0.00 0.45 0.74], [0.85 0.33 0.10], [0.47 0.67 0.19]});
+variantColors = containers.Map({'standard', 'weak', 'implicit', 'narmax'}, ...
+    {[0.00 0.45 0.74], [0.85 0.33 0.10], [0.47 0.67 0.19], [0.49 0.18 0.56]});
+defaultColor = [0.50 0.50 0.50]; % fallback for any future variant not yet in the map above
 variantList = unique({best.all_valid.variant});
 for i = 1:numel(variantList)
     vMask = strcmp({best.all_valid.variant}, variantList{i});
     subset = best.all_valid(vMask);
+    if isKey(variantColors, variantList{i})
+        thisColor = variantColors(variantList{i});
+    else
+        thisColor = defaultColor;
+    end
     scatter([subset.num_active_terms], [subset.trajectory_rmse], 20, ...
-        variantColors(variantList{i}), 'filled', 'DisplayName', variantList{i});
+        thisColor, 'filled', 'DisplayName', variantList{i});
 end
 xlabel('Number of active terms (sparsity)');
 ylabel('Trajectory RMSE');
